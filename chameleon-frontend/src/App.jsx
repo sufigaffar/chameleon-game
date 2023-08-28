@@ -88,6 +88,7 @@ function App() {
   }
 
   React.useEffect(() => {
+    console.log('listeners registered')
     socket.current.on('user-list', (users) => setUsers(users));
     socket.current.on('start-game', ({selecting, chameleon, starting}) => {
       setScreen(SCREENS.GAME);
@@ -95,8 +96,12 @@ function App() {
       setChameleon(chameleon.username);
       setStarting(starting.username);
     });
-    socket.current.on('category-selected', (category) => {
+    socket.current.on('category-selected', ({category, selecting, starting, chameleon}) => {
+      setScreen(SCREENS.GAME);
       setSelectedCategory(category);
+      setSelecting(selecting.username);
+      setChameleon(chameleon.username);
+      setStarting(starting.username);
     });
     socket.current.on('voting-started', () => {
       setScreen(SCREENS.VOTE);

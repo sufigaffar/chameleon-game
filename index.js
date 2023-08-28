@@ -31,6 +31,12 @@ function getRandomInt(min, max) { // min and max included
   return Math.floor(Math.random() * (max - min + 1) + min)
 }
 
+const GAME_STATE = {
+  PLAYING: 'playing',
+  SELECTING_CATEGORY: 'selecting_category',
+  VOTING: 'voting'
+}
+
 // Function to generate number between two numbers
 
 const startRound = (game) => {
@@ -53,6 +59,7 @@ const startRound = (game) => {
   game.selecting = users[selectingUser];
   game.starting = users[startingUser];
 
+  game.state = GAME_STATE.SELECTING_CATEGORY;
   game.inProgress = true;
 
   io.to(game.id).emit('start-game', {
@@ -159,32 +166,69 @@ io.on('connection', (socket) => {
         running: false,
         id: gameId,
         totalVotes: 0,
+        state: 'waiting'
       };
     }
 
     game = games[gameId];
+    let user;
     // Inherit a cached user if it exists
     if (game.cachedUsers[username]) {
-      game.activeUsers[socket.id] = game.cachedUsers[username];
+      user = game.cachedUsers[username];
       delete game.cachedUsers[username];
     } else {
-      game.activeUsers[socket.id] = {username: username, ready: false, points: 0};
+      user = {username: username, ready: false, points: 0};
     }
+
+    // Delete any users with the same username
+    Object.entries(game.activeUsers).forEach((socket, user) => {
+      if (user.username === username) {
+        io.sockets.sockets[socket].disconnect();
+      }
+    });
+
+    game.activeUsers[socket.id] = user;
 
     socket.join(gameId);
     updateUsers(game);
   });
 
   socket.on('user-ready', (checked) => {
-    if (!game || game.inProgress) {
+    if (!game || !game.activeUsers[socket.id]) {
       return;
     }
 
     game.activeUsers[socket.id].ready = !!checked;
+    updateUsers(game);
+
+    if (game.inProgress) {
+      console.log('in progress', game.state)
+      switch (game.state) {
+        case GAME_STATE.SELECTING_CATEGORY:
+          socket.emit('start-game', {
+            selecting: game.selecting,
+            chameleon: game.chameleon,
+            starting: game.starting
+          });
+          break;
+        case GAME_STATE.VOTING:
+          socket.emit('voting-started');
+          break;
+        case GAME_STATE.PLAYING:
+          console.log('dispatching cat selected event', game.category)
+          socket.emit('category-selected', {
+            category: game.category,
+            chameleon: game.chameleon,
+            starting: game.starting,
+            selecting: game.selecting
+          })
+          break;
+      }
+      return;
+    }
 
     const allUsersReady = Object.values(game.activeUsers).every(user => user.ready);
-    updateUsers(game);
-    if (allUsersReady && Object.values(game.activeUsers).length > 2) {
+    if (allUsersReady && Object.values(game.activeUsers).length > 3) {
       console.log('all users are ready lets gooo');
       startRound(game)
     }
@@ -192,13 +236,21 @@ io.on('connection', (socket) => {
 
   socket.on('start-voting', () => {
     console.log('voting started')
+    game.state = GAME_STATE.VOTING;
     io.to(game.id).emit('voting-started');
   })
 
   socket.on('select-category', (category) => {
     console.log('category chosen', category)
     game.category = category;
-    io.to(game.id).emit('category-selected', category);
+    game.state = GAME_STATE.PLAYING;
+
+    io.to(game.id).emit('category-selected', {
+      category: game.category,
+      chameleon: game.chameleon,
+      starting: game.starting,
+      selecting: game.selecting
+    })
   });
 
   socket.on('vote-submitted', ({username, vote}) => {
@@ -218,7 +270,7 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     // Remove the user from the game
-    if (!game) {
+    if (!game || !game.activeUsers[socket.id]) {
       return;
     }
 
