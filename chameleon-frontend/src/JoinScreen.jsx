@@ -12,7 +12,7 @@ function JoinScreen(props) {
   return (
     <>
       <h1>Join</h1>
-      <input type="text" onChange={(e) => setUsername(e.target.value)} onKeyDown={handleOnKeyDown} /><br /><br />
+      <input placeholder="username" type="text" onChange={(e) => setUsername(e.target.value)} onKeyDown={handleOnKeyDown} /><br /><br />
       <button onClick={() => props.onJoin(username)} disabled={!username}>Join</button>
     </>
   );
