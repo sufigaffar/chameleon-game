@@ -42,7 +42,7 @@ const GAME_STATE = {
 const startRound = (game) => {
   console.log('starting round')
   // Pick a person to choose the category
-  const users = Object.values(game.activeUsers);
+  const users = Object.values(getNonNewUsers(game));
   const selectingUser = getRandomInt(0, users.length - 1);
   let chameleonUser;
   let startingUser;
@@ -78,7 +78,29 @@ const updateUsers = (game) => {
     return;
   }
 
-  io.to(game.id).emit('user-list', game.activeUsers);
+  io.to(game.id).emit('user-list', getNonNewUsers(game));
+}
+
+const getNonNewUsers = (game) => {
+  // return game.activeUsers;
+  const usersWithoutNew = {};
+  Object.entries(game.activeUsers).forEach(([socket, user]) => {
+    if (!user.isNew) {
+      usersWithoutNew[socket] = user;
+    }
+  });
+  return usersWithoutNew;
+}
+
+const getNewUsers = (game) => {
+  // return game.activeUsers;
+  const newUsers = {};
+  Object.entries(game.activeUsers).forEach(([socket, user]) => {
+    if (user.isNew) {
+      newUsers[socket] = user;
+    }
+  });
+  return newUsers;
 }
 
 const totalVotes = (game) => {
@@ -148,6 +170,11 @@ const totalVotes = (game) => {
   })
   updateUsers(game);
 
+  // Mark any 'new' users as not-new
+  Object.entries(getNewUsers(game)).forEach(([socket,]) => {
+    game.activeUsers[socket].isNew = false;
+  });
+
   // Clean up votes
   game.votes = {};
   game.totalVotes = 0;
@@ -174,10 +201,10 @@ io.on('connection', (socket) => {
     let user;
     // Inherit a cached user if it exists
     if (game.cachedUsers[username]) {
-      user = game.cachedUsers[username];
+      user = {...game.cachedUsers[username], isNew: false};
       delete game.cachedUsers[username];
     } else {
-      user = {username: username, ready: false, points: 0};
+      user = {username: username, ready: false, points: 0, isNew: !!game.inProgress};
     }
 
     // Delete any users with the same username
@@ -194,15 +221,19 @@ io.on('connection', (socket) => {
   });
 
   socket.on('user-ready', (checked) => {
-    if (!game || !game.activeUsers[socket.id]) {
+    if (!game) {
+      return;
+    }
+    const user = game.activeUsers[socket.id];
+    if (!user) {
       return;
     }
 
-    game.activeUsers[socket.id].ready = !!checked;
+    user.ready = !!checked;
     updateUsers(game);
 
-    if (game.inProgress) {
-      console.log('in progress', game.state)
+    if (game.inProgress && !user.isNew) {
+      console.log('in progress', game.state);
       switch (game.state) {
         case GAME_STATE.SELECTING_CATEGORY:
           socket.emit('start-game', {
@@ -255,7 +286,9 @@ io.on('connection', (socket) => {
 
   socket.on('vote-submitted', ({username, vote}) => {
     console.log(`voted submitted by ${username} for ${vote}`);
-
+    if (!game) {
+      return;
+    }
     if (!game.votes[vote]) {
       game.votes[vote] = [];
     }
@@ -263,7 +296,7 @@ io.on('connection', (socket) => {
     game.totalVotes += 1;
     game.votes[vote].push(username);
 
-    if (game.totalVotes >= Object.values(game.activeUsers).length) {
+    if (game.totalVotes >= Object.values(getNonNewUsers(game)).length) {
       totalVotes(game);
     }
   });
@@ -295,7 +328,7 @@ io.on('connection', (socket) => {
         }
       }
       // Check if everyone remaining has voted, if they have, total up the votes
-      const remainingUsers = Object.values(game.activeUsers).map(user => user.username);
+      const remainingUsers = Object.values(getNonNewUsers(game)).filter(user => !user.isNew).map(user => user.username);
       Object.values(game.votes).forEach((voters) => {
         voters.forEach(voter => {
           if (remainingUsers.includes(voter)) {
