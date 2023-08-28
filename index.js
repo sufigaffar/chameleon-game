@@ -74,6 +74,78 @@ const updateUsers = (game) => {
   io.to(game.id).emit('user-list', game.activeUsers);
 }
 
+const totalVotes = (game) => {
+  // Voting has finished, total up
+  // Get the maximum number of votes for any one
+  // If it's the only one, that's the winner, otherwise nobody was voted
+  let maxVotes = 0;
+  Object.values(game.votes).forEach(votes => {
+    if (votes.length > maxVotes) {
+      maxVotes = votes.length;
+    }
+  });
+  // So the highest number is maxVotes. Now identify which this applies to
+  const numberMatchingMaxVotes = Object.values(game.votes).filter(votes => votes.length === maxVotes);
+  let win = false;
+  if (numberMatchingMaxVotes.length > 1) {
+    // No one was agreed upon, give the chameleon three points as they evaded
+    // Give the chameleon three points as they evaded
+    const chameleonUser = getUserItemForUsername(game, game.chameleon.username);
+    if (chameleonUser) {
+      chameleonUser.points += 3;
+    }
+    // Also give anybody who guessed correctly a point
+    if (game.votes[game.chameleon.username]) {
+      game.votes[game.chameleon.username].forEach((voter) => {
+        const user = getUserItemForUsername(game, voter);
+        if (user) {
+          user.points += 1;
+        }
+      })
+    }
+  } else {
+    // One chameleon was 'voted for', who was it?
+    const username = Object.keys(game.votes).find(votedName => game.votes[votedName].length === maxVotes);
+    // Was it correct?
+    if (game.chameleon.username === username) {
+      // Give all of those people a point
+      game.votes[username].forEach((voter) => {
+        const user = getUserItemForUsername(game, voter);
+        if (user) {
+          user.points += 1;
+        }
+      });
+      win = true;
+    } else {
+      // Give the chameleon three points as they evaded
+      const chameleonUser = getUserItemForUsername(game, game.chameleon.username);
+      if (chameleonUser) {
+        chameleonUser.points += 3;
+      }
+      // Also give anybody who guessed correctly a point
+      if (game.votes[game.chameleon.username]) {
+        game.votes[game.chameleon.username].forEach((voter) => {
+          const user = getUserItemForUsername(game, voter);
+          if (user) {
+            user.points += 1;
+          }
+        });
+      }
+    }
+  }
+
+  game.inProgress = false;
+  io.to(game.id).emit('chameleon-revealed', {chameleon: game.chameleon.username, win});
+  Object.values(game.activeUsers).forEach((user) => {
+    user.ready = false;
+  })
+  updateUsers(game);
+
+  // Clean up votes
+  game.votes = {};
+  game.totalVotes = 0;
+}
+
 io.on('connection', (socket) => {
   let game;
 
@@ -104,7 +176,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('user-ready', (checked) => {
-    if (game.inProgress) {
+    if (!game || game.inProgress) {
       return;
     }
 
@@ -139,77 +211,18 @@ io.on('connection', (socket) => {
     game.totalVotes += 1;
     game.votes[vote].push(username);
 
-    if (game.totalVotes === Object.values(game.activeUsers).length) {
-      // Voting has finished, total up
-      // Get the maximum number of votes for any one
-      // If it's the only one, that's the winner, otherwise nobody was voted
-      let maxVotes = 0;
-      Object.values(game.votes).forEach(votes => {
-        if (votes.length > maxVotes) {
-          maxVotes = votes.length;
-        }
-      });
-      // So the highest number is maxVotes. Now identify which this applies to
-      const numberMatchingMaxVotes = Object.values(game.votes).filter(votes => votes.length === maxVotes);
-      let win = false;
-      if (numberMatchingMaxVotes.length > 1) {
-        // No one was agreed upon, give the chameleon three points as they evaded
-        // Give the chameleon three points as they evaded
-        const chameleonUser = getUserItemForUsername(game, game.chameleon.username);
-        chameleonUser.points += 3;
-        // Also give anybody who guessed correctly a point
-        if (game.votes[game.chameleon.username]) {
-          game.votes[game.chameleon.username].forEach((voter) => {
-            const user = getUserItemForUsername(game, voter);
-            user.points += 1;
-          })
-        }
-      } else {
-        // One chameleon was 'voted for', who was it?
-        const username = Object.keys(game.votes).find(votedName => game.votes[votedName].length === maxVotes);
-        // Was it correct?
-        if (game.chameleon.username === username) {
-          // Give all of those people a point
-          game.votes[username].forEach((voter) => {
-            const user = getUserItemForUsername(game, voter);
-            user.points += 1;
-          });
-          win = true;
-        } else {
-          // Give the chameleon three points as they evaded
-          const chameleonUser = getUserItemForUsername(game, game.chameleon.username);
-          chameleonUser.points += 3;
-          // Also give anybody who guessed correctly a point
-          if (game.votes[game.chameleon.username]) {
-            game.votes[game.chameleon.username].forEach((voter) => {
-              const user = getUserItemForUsername(game, voter);
-              user.points += 1;
-            });
-          }
-        }
-      }
-
-      game.inProgress = false;
-      io.to(game.id).emit('chameleon-revealed', {chameleon: game.chameleon.username, win});
-      Object.values(game.activeUsers).forEach((user) => {
-        user.ready = false;
-      })
-      updateUsers(game);
-
-      // Clean up votes
-      game.votes = {};
-      game.totalVotes = 0;
+    if (game.totalVotes >= Object.values(game.activeUsers).length) {
+      totalVotes(game);
     }
   });
 
   socket.on('disconnect', () => {
-    console.log('the user disconnected :(', game)
-
     // Remove the user from the game
     if (!game) {
       return;
     }
 
+    console.log('the user disconnected :(', game.activeUsers[socket.id].username)
     socket.leave(game.id)
 
     const user = game.activeUsers[socket.id];
@@ -220,6 +233,29 @@ io.on('connection', (socket) => {
     if (Object.values(game.activeUsers).length === 0) {
       // Remove the game if there are no users left
       delete games[game.id];
+    } else {
+      if (!game.inProgress) {
+        // Check if everyone remaining is ready, if they are, start the game
+        const allUsersReady = Object.values(game.activeUsers).every(user => user.ready);
+        if (allUsersReady && Object.values(game.activeUsers).length > 2) {
+          console.log('all users are ready lets gooo');
+          startRound(game)
+        }
+      }
+      // Check if everyone remaining has voted, if they have, total up the votes
+      const remainingUsers = Object.values(game.activeUsers).map(user => user.username);
+      Object.values(game.votes).forEach((voters) => {
+        voters.forEach(voter => {
+          if (remainingUsers.includes(voter)) {
+            const index = remainingUsers.indexOf(voter);
+            remainingUsers.splice(index, 1);
+          }
+        })
+      });
+      if (remainingUsers.length === 0) {
+        console.log('everyone left has voted, totaling up votes')
+        totalVotes(game);
+      }
     }
   });
 });
