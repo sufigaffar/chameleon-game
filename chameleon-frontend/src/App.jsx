@@ -110,6 +110,9 @@ function App() {
       setScreen(SCREENS.CHAMELEON_REVEALED);
       setWasWin(win);
     });
+    socket.current.on('disconnect', () => {
+      window.location.reload();
+    })
   }, []);
 
   return (
