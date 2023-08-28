@@ -211,6 +211,7 @@ io.on('connection', (socket) => {
     Object.entries(game.activeUsers).forEach((socket, user) => {
       if (user.username === username) {
         io.sockets.sockets[socket].disconnect();
+        delete game.activeUsers[socket];
       }
     });
 
